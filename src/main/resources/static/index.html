@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Automata Engine</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; color: #333; margin: 0; padding: 20px; }
+        .container { max-width: 900px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        h2 { margin-top: 0; color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        label { display: block; margin-top: 10px; font-weight: bold; font-size: 0.9em; }
+        input[type="text"], select { width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+        button { margin-top: 15px; padding: 10px 15px; background-color: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; width: 100%; }
+        button:hover { background-color: #2980b9; }
+        .row { display: flex; gap: 10px; margin-top: 5px; align-items: center;}
+        .row input[type="checkbox"] { margin-top: 0; }
+
+        /* Result Styling */
+        #resultArea { margin-top: 20px; padding: 15px; border-radius: 4px; display: none; text-align: center; font-weight: bold; font-size: 1.2em;}
+        .accepted { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .rejected { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        #traceArea { margin-top: 10px; font-family: monospace; background: #eee; padding: 10px; border-radius: 4px; font-size: 0.9em; word-wrap: break-word;}
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="card">
+        <h2>1. Create Machine (DFA)</h2>
+        <label>Machine Name</label>
+        <input type="text" id="m-name" placeholder="e.g., Ends with '01'">
+
+        <label>Alphabet (comma separated)</label>
+        <input type="text" id="m-alphabet" placeholder="e.g., 0,1">
+
+        <label>States (Name | isStart | isAccepting)</label>
+        <div id="states-container">
+            <div class="row state-row">
+                <input type="text" placeholder="State Name (e.g., q0)" class="s-name">
+                <input type="checkbox" class="s-start"> Start
+                <input type="checkbox" class="s-accept"> Accept
+            </div>
+        </div>
+        <button type="button" onclick="addStateRow()" style="background-color: #7f8c8d; margin-top: 5px;">+ Add State</button>
+
+        <label>Transitions (From State | Input | To State)</label>
+        <div id="transitions-container">
+            <div class="row trans-row">
+                <input type="text" placeholder="From (e.g., q0)" class="t-from">
+                <input type="text" placeholder="Input (e.g., 0)" class="t-input">
+                <input type="text" placeholder="To (e.g., q1)" class="t-to">
+            </div>
+        </div>
+        <button type="button" onclick="addTransRow()" style="background-color: #7f8c8d; margin-top: 5px;">+ Add Transition</button>
+
+        <button onclick="saveMachine()">💾 Save Machine to Database</button>
+    </div>
+
+    <div class="card">
+        <h2>2. Simulate</h2>
+        <label>Select Saved Machine</label>
+        <select id="machine-select">
+            <option value="">-- Load machines... --</option>
+        </select>
+        <button type="button" onclick="loadMachines()" style="background-color: #7f8c8d; margin-top: 5px;">🔄 Refresh List</button>
+
+        <label>Test Input String</label>
+        <input type="text" id="test-string" placeholder="e.g., 100101">
+
+        <button onclick="runSimulation()">▶ Run Engine</button>
+
+        <div id="resultArea"></div>
+        <div id="traceArea" style="display:none;"></div>
+    </div>
+</div>
+
+<script>
+    // --- UI Helpers for dynamic rows ---
+    function addStateRow() {
+        const row = `<div class="row state-row"><input type="text" placeholder="State Name" class="s-name"><input type="checkbox" class="s-start"> Start <input type="checkbox" class="s-accept"> Accept</div>`;
+        document.getElementById('states-container').insertAdjacentHTML('beforeend', row);
+    }
+
+    function addTransRow() {
+        const row = `<div class="row trans-row"><input type="text" placeholder="From" class="t-from"><input type="text" placeholder="Input" class="t-input"><input type="text" placeholder="To" class="t-to"></div>`;
+        document.getElementById('transitions-container').insertAdjacentHTML('beforeend', row);
+    }
+
+    // --- API Call: Fetch saved machines for the dropdown ---
+    async function loadMachines() {
+        const response = await fetch('/api/machines');
+        const machines = await response.json();
+        const select = document.getElementById('machine-select');
+        select.innerHTML = '<option value="">-- Select a machine --</option>';
+        machines.forEach(m => {
+            select.innerHTML += `<option value="${m.id}">${m.id}: ${m.name}</option>`;
+        });
+    }
+
+    // --- API Call: Save a new machine ---
+    async function saveMachine() {
+        // 1. Gather Data from HTML
+        const name = document.getElementById('m-name').value;
+        const alphabet = document.getElementById('m-alphabet').value;
+
+        // Build States Array
+        const states = Array.from(document.querySelectorAll('.state-row')).map(row => ({
+            name: row.querySelector('.s-name').value,
+            start: row.querySelector('.s-start').checked,
+            accepting: row.querySelector('.s-accept').checked
+        })).filter(s => s.name.trim() !== "");
+
+        // Build Transitions Array
+        const transitions = Array.from(document.querySelectorAll('.trans-row')).map(row => {
+            const fromName = row.querySelector('.t-from').value;
+            const toName = row.querySelector('.t-to').value;
+            // Map the typed string names back to the state objects we just created
+            const fromState = states.find(s => s.name === fromName);
+            const toState = states.find(s => s.name === toName);
+
+            return {
+                inputSymbol: row.querySelector('.t-input').value,
+                fromState: fromState,
+                toState: toState
+            };
+        }).filter(t => t.inputSymbol.trim() !== "");
+
+        // 2. Structure the JSON payload
+        const payload = { name, alphabet, states, transitions };
+
+        // 3. POST to Spring Boot
+        try {
+            const response = await fetch('/api/machines', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if(response.ok) {
+                alert("Machine saved successfully!");
+                loadMachines(); // Auto-refresh dropdown
+            } else {
+                alert("Error saving machine. Check console or database constraints.");
+            }
+        } catch (error) {
+            console.error("Error:", error);
+        }
+    }
+
+    // --- API Call: Run the Simulation ---
+    async function runSimulation() {
+        const machineId = document.getElementById('machine-select').value;
+        const inputString = document.getElementById('test-string').value;
+
+        if (!machineId) {
+            alert("Please select a machine first!");
+            return;
+        }
+
+        const resultArea = document.getElementById('resultArea');
+        const traceArea = document.getElementById('traceArea');
+
+        try {
+            const response = await fetch(`/api/machines/${machineId}/simulate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ inputString: inputString })
+            });
+
+            const data = await response.json();
+
+            // Update UI based on Result
+            resultArea.style.display = "block";
+            resultArea.innerText = data.status;
+            resultArea.className = data.status === "ACCEPTED" ? "accepted" : "rejected";
+
+            // Print the Path
+            traceArea.style.display = "block";
+            traceArea.innerText = "Path: " + data.trace.join(" ➔ ");
+
+        } catch (error) {
+            console.error("Simulation error:", error);
+        }
+    }
+
+    // Load machines when page opens
+    window.onload = loadMachines;
+</script>
+</body>
+</html>
